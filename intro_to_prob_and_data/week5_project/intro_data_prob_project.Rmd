@@ -1,0 +1,741 @@
+---
+title: "Exploring the BRFSS data"
+output: 
+  html_document: 
+    fig_height: 8
+    fig_width: 10
+    highlight: pygments
+    theme: spacelab
+---
+
+## Setup
+
+### Load packages
+
+```{r load-packages, message = FALSE}
+library(ggplot2)
+library(dplyr)
+library(knitr)
+library(stringr)
+library(gridExtra)
+library( reshape2 )
+```
+
+### Global functions
+```{r globalfuncs}
+# Format as percentage for plots' text labels
+percent = function( x ) { paste0( round( x * 100 ), "%" ) }
+```
+
+### Load data
+
+```{r load-data}
+load("brfss2013.RData")
+df = tbl_df( brfss2013 ) # Loads into a shorter reference object, as a dplyr table dataframe
+rm( 'brfss2013' )        # Remove the original dataframe from memory to save mem
+
+# Rename education, age group and diabetes factor levels (shorter, more readable forms)
+levels( df$educa ) = c(
+    "Kindergarten", 
+    "Elementary", 
+    "Some high school", 
+    "Highschool grad", 
+    "College/Technical", 
+    "College grad" 
+)
+
+levels( df$X_age_g )  = c( "18-24", "25-34", "35-44", "45-54", "55-64", "65+" )
+
+levels( df$diabete3 ) = c( "Yes", "Pregnancy", "No", "Pre/borderline" )
+```
+
+* * *
+
+## Part 1: Data
+
+### Collection method and implications on generalizability
+This data was collected via voluntary telephone interviews with residents of US states and territories aged 18 and older. Since this is a retrospective observational study, and not a controlled experiment, we can at most infer associations and correlations between the collected paramters, rather than causal connections.
+
+### Basic demographics
+
+Here we will examine some possible confounders for overall general well being and incidence of disease, such as age and education (as an indirect indicator of affluence).
+
+#### Age groups by state
+```{r genDemog}
+byStateAndAge = df %>% 
+    group_by( X_state, X_age_g ) %>% 
+    summarize( n = n() ) %>% 
+    filter( !is.na( X_age_g ) )
+
+ggplot( byStateAndAge, aes( x = reorder(X_state, n), y = n, fill = X_state ) )           +
+    geom_bar( stat = 'identity', colour = "black" ) + facet_grid( X_age_g ~ . )          +
+    theme( legend.position="none", axis.text.x = element_text( angle = 90, hjust = 1 ) ) +
+    xlab("") + ylab("Number of respondants")
+
+s          = df %>% group_by( X_age_g ) %>% summarize( n = n(), p = n() / nrow(df) ) %>% filter( !is.na( X_age_g ) )
+s$p        = percent( s$p )
+names( s ) = c("Age group", "n", "p")
+kable(  s, caption = "Table 1: Number and percentage of respondents from different age groups" )
+
+```
+
+This chart and table illustrate both the overall population in each state and the number of respondents in each age category. A visible trend is that the number of respondents increases with age. In other words, the older the subject, the more likely s/he is to respond to this health related survey. However there's still a fair amount of respondents (27,203) even in the youngest age category (18-24), comprising 5% of all respondents.
+
+
+#### Age and general health
+```{r ageAndGenhealth}
+# Sample sizes in each education level
+kable( summary( df$educa ) )
+
+# Summarize data by age group and general health 
+ageAndGenHealth = df %>% 
+    filter( !is.na( X_age_g ), !is.na( genhlth ) ) %>%
+    group_by( X_age_g, genhlth )                   %>% 
+    summarize( n = n() ) 
+
+# Calculate perentage and aggregated percentage for each subgroup
+p           = c()
+aggregatedP = c()
+pPos        = c()
+currentAggP = 0
+
+for ( i in 1:nrow( ageAndGenHealth ) ) {
+    if ( currentAggP >= 1 ) { currentAggP = 0 }
+    n         = ageAndGenHealth[ i, ]$n
+    ageGrp    = ageAndGenHealth[ i, ]$X_age_g
+    genhlth   = ageAndGenHealth[ i, ]$genhlth
+    ageGrpSum = sum( filter( ageAndGenHealth, X_age_g == ageGrp )$n )
+    p         = c( p, n / ageGrpSum ) # As % of current age group's total n
+    
+    # Calculate aggregated p for chart label height (y) values
+    currentAggP = currentAggP + n / ageGrpSum
+    aggregatedP = c( aggregatedP, currentAggP )
+    pPos        = c( pPos, 
+                     ifelse(
+                         currentAggP == p[[i]],
+                         currentAggP / 2,
+                         (n / ageGrpSum) / 2 + aggregatedP[[i-1]]
+                     )
+                  )
+}
+
+# Add percentage, labels and label positions as cols in summary dataframe
+ageAndGenHealth$p      = p
+ageAndGenHealth$labels = percent( p )
+ageAndGenHealth$pPos   = pPos
+
+ggplot( ageAndGenHealth, aes( x = X_age_g, y = p, fill = genhlth, group = genhlth ) ) +
+    geom_bar( stat = 'identity', colour = "black" )                                   + 
+    geom_text( aes( x = X_age_g, y = pPos, label = labels ), colour = "black" )       + 
+    theme( legend.position = "bottom" )                                               + 
+    xlab("") + ylab("") + scale_y_continuous( labels = percent )                      +
+    ggtitle( "Age and physical health" )
+
+```
+
+This data clearly shows the well known relatiobship between age and overall health.
+
+The younger the respondent, the higher the chance s/he will report better health.
+There's a clear decline in the percent of respondents reporting "excellent" and "very good" health as age increases, and a corresponding incline in the percent of respondents reporting "fair" and "poor" health with age. We will later show how this affects specific diseases such as diabetes and cardiovascular disease.
+
+
+#### Education level and general health
+
+```{r educationAndHealth}
+eduData = filter( df, !is.na( educa ), !is.na( physhlth ) )
+ggplot( eduData, aes( x = reorder(educa, physhlth), y = physhlth, fill = educa ) ) +
+    geom_boxplot() + 
+    theme( legend.position="none" ) + 
+    xlab("Education level") + ylab("Number of days physical health not good") +
+    ggtitle( "Education level and physical health" )
+
+eduData = df %>% 
+    filter( !is.na( educa ), !is.na( menthlth ) ) %>%
+    group_by( educa ) %>% 
+    summarize( 
+        n              = n(), 
+        avg_mentalhlth = mean( menthlth ), 
+        sd_mentalhlth  = mean( menthlth ),
+        iqr_mentalhlth = IQR( menthlth )
+    )
+
+ggplot( eduData, aes( x = reorder(educa, avg_mentalhlth), y = avg_mentalhlth, fill = educa ) ) +
+    geom_bar( stat = 'identity', colour = "black" ) +
+    theme( legend.position="none" ) +
+    ylab("Avg. num. of days mental health not good") + xlab("Education level") +
+    ggtitle( "Education level and mental health" )
+
+```
+
+Overall, there seems to be a positive relationship between education level and health, represented as a smaller number of reported days of poor physical or mental health as education level increases. There are many outliers in the higher education level groups (as seen in the upper boxplot). Also, the lowest education level ("Never attended school or only kindergarten") is at the middle instead of the expected top with respect to poor physical health. But the bulk of data represents a positive correlation between education level and health.
+
+Mental health is especially strongly correlated with education, in particular with the kindergarten level. It might be possible that some respondents with this education level (which are very few in number and comprise a mere 0.1% of respondents), were unable to attain higher education levels due to some form of mental disability.
+
+### Diet variables
+
+We will also investigate the relationnship of fruit and vegetable consumption on incidence of disease. This requires some variable preparation and normalization, as the existing variables' values make it difficult to perform a direct quantitative analysis.
+
+Values in dietary consumption variables can have either a 3 digit number, 0 or NA.
+In the 3 digit number values, the first digit determines whether the quantity specified in the last two digits is per day (firstDigit=1), per week (firstDigit=2) or month (firstDigit=3).
+We must normalize all these values so that values are comparable to each other. Here we shall normalize all values to monthly values, by multiplying per-day values by 30.4167 (avg number of days per month) and per-week values by 30.4167/4.
+
+```{r prepareDietVars}
+normalizeDietVar = function( val ) {
+    # This function normalizes a dietary consumption value as monthly values
+    multipliers = list( 
+        "1" = 30.4167,   # Daily
+        "2" = 30.4167/4, # Weekly value
+        "3" = 1          # Monthly value
+    )
+    
+    val = as.character( val ) # Convert to character
+    if ( is.na( val ) ) {
+        return( NA )
+    } else if ( val == "0" ) {
+        return( 0 )
+    } else if ( nchar( val ) == 3 ) {
+        firstDigit       = str_sub( val, start = 1, end = 1 )
+        consumptionValue = as.numeric( str_sub( val, start = 2, end = 3 ) )
+        return( consumptionValue * multipliers[[ firstDigit ]] )
+    } else {
+        return( NA )
+    }
+}
+
+# Create new normalzied variables for dietary consumption
+df$fruitju1_nor = sapply( df$fruitju1, normalizeDietVar )
+df$fruit1_nor   = sapply( df$fruit1,   normalizeDietVar )
+df$fvbeans_nor  = sapply( df$fvbeans,  normalizeDietVar )
+df$fvgreen_nor  = sapply( df$fvgreen,  normalizeDietVar )
+df$fvorang_nor  = sapply( df$fvorang,  normalizeDietVar )
+df$vegetab1_nor = sapply( df$vegetab1, normalizeDietVar )
+
+# Aggregate all vegetable variables into one unified var
+df$all_veg = rowSums( cbind( df$fvgreen_nor, df$fvorang_nor, df$vegetab1_nor ), na.rm = TRUE )
+```
+
+#### Fruit and vegetable consumption
+
+```{r fruitVegConsumption}
+# Filter out major outliers with all_veg values over 200
+kable(
+    df %>% filter( !is.na( all_veg ), all_veg < 200 ) %>% 
+    summarize( mean = mean( all_veg ), median = median( all_veg ), sd = sd( all_veg), iqr = IQR( all_veg ) ),
+    caption = "Table 3: Vegetable consumption statistics (times per month)"
+)
+
+kable( 
+    round( quantile( filter( df, all_veg < 200 )$all_veg, na.rm = TRUE ), 2), 
+    caption = "Table 4: vegetable consumption quartiles" 
+)
+
+df %>% filter( !is.na( all_veg ), all_veg < 200 ) %>% 
+    ggplot( aes( x = all_veg, fill = ..count.. ) )                 +
+    geom_histogram( binwidth = 10, colour = "black" )              +
+    theme( legend.position="none" )                                +
+    scale_x_continuous( breaks = seq( 0, 200, by = 10 ) )          +
+    scale_fill_gradient( "Count", low = "black", high = "green" )  +
+    xlab( "Number of times vegetables consumed per month" )        + 
+    ggtitle( "All vegetable consumption\n(normalized number of times per month)" )
+
+
+kable(
+    df %>% filter( !is.na( fruit1_nor ), fruit1_nor < 200 ) %>% 
+    summarize( mean = mean( fruit1_nor ), median = median( fruit1_nor ), sd = sd( fruit1_nor), iqr = IQR( fruit1_nor ) ),
+    caption = "Table 5: Fruit consumption (times per month) statistics"
+)
+
+kable( 
+    quantile( filter( df, fruit1_nor < 200 )$fruit1_nor, na.rm = TRUE ), 
+    caption = "Table 6: fruit consumption quartiles" 
+)
+
+df %>% filter( !is.na( fruit1_nor ), fruit1_nor < 200 ) %>% 
+    ggplot( aes( x = fruit1_nor, fill = ..count.. ) )           +
+    geom_histogram( binwidth = 10, colour = "black" )           +  
+    theme( legend.position="none" )                             +
+    scale_x_continuous( breaks = seq( 0, 200, by = 10 ) )       +
+    scale_fill_gradient( "Count", low = "white", high = "red" ) +
+    xlab( "Number of times fruit consumed per month" )         + 
+    ggtitle( "Fruit consumption\n(normalized number of times per month)" )
+```
+
+##### Fruit and vegetable consumption data:
+
+Vegetable consumption has a clear right skew, with most respondents consuming vegetables around 50 times per month (median = 50, mean = 53.3), and 50% of the population (Q1-Q3) consumed vegetables between 29-75 times / month (no more than ~2.5 times a day).
+
+Fruit consumption also has a clear right skew, but the distribution's shape is narrower and much more irregular, with a number of peaks around 30, 60 and 90 times a month. Most respondents seem to have consumed fruit around 30 times per month (~1 per day), with mean = 32.9 and median = 30.4. 
+50% of the population (Q1-Q3) consumed vegetables between 15-38 times a month (not more than ~1.25 per day).
+
+
+```{r fruitVegBMI}
+p1 = df %>% filter( !is.na( X_bmi5cat ), !is.na( fruit1_nor ) ) %>%
+    ggplot( aes( x = X_bmi5cat, y = fruit1_nor, fill = X_bmi5cat ) )    +
+    geom_bar( colour = "black", stat = "summary", fun.y = "mean")       +
+    theme( legend.position="none" )                                     +
+    xlab("BMI category") + ylab( "Mean fruit consumption / month" )     +
+    scale_fill_brewer( palette = 9 )                                    +
+    ggtitle( "Fruit consumption and BMI" )
+
+p2 = df %>% filter( !is.na( X_bmi5cat ), !is.na( all_veg ) ) %>%
+    ggplot( aes( x = X_bmi5cat, y = all_veg, fill = X_bmi5cat ) )       +
+    geom_bar( colour = "black", stat = "summary", fun.y = "mean")       +
+    theme( legend.position="none" )                                     +
+    xlab("BMI category") + ylab( "Mean vegetable consumption / month" ) +
+    scale_fill_brewer( palette = 5 )                                    +
+    ggtitle( "Vegetable consumption and BMI" )
+
+do.call( "grid.arrange", c( list( p1, p2 ), ncol = 2 ) )
+
+s = df %>% filter( !is.na( X_bmi5cat ), !is.na( fruit1_nor ), !is.na( all_veg ) ) %>%
+        group_by( X_bmi5cat ) %>%
+        summarize( 
+            n        = n(),
+            frMean   = round( mean( fruit1_nor ),   2),
+            frMedian = round( median( fruit1_nor ), 2),
+            frSD     = round( sd( fruit1_nor ),     2),
+            vgMean   = round( mean( all_veg ),      2),
+            vgMedian = round( median( all_veg ),    2),
+            vgSD     = round( sd( all_veg ),        2)
+        )
+
+s = s %>% rename( BMI_Category = X_bmi5cat )
+
+kable( 
+    s,
+    caption = "Table 7: Fruit and vegetable consumption in various BMI groups"
+)
+
+```
+
+There seems to be a relationship, though not a very strong one, between fruit and vegetable consumption and BMI. 
+The plots for fruit and vegetable consumption look very similar: the highest consumption group is that of the normal weight, while the lowest consumption group is that of the obese respondents. There doesn't seem to be a difference between the underweight and overweight groups (~33 fruits and ~53.2 vegetables per month for both groups ), nor a very big difference between the normal and obese groups (35 vs. 30.8 fruits and 57 vs. 48 vegetables / month, respectively).
+
+
+#### Cardiovascular diseases (heart attack, angina & coronary heart disease and stroke)
+
+Single variable for any cardiovascular disease
+```{r unifiedCVD}
+df$any_cvd = rep( 'No', nrow(df) )
+
+allCVD = df$cvdinfr4 == 'Yes' | df$cvdcrhd4 == 'Yes' | df$cvdstrk3 == 'Yes'
+NACVD  = is.na( allCVD )
+allCVD[ NACVD ] = FALSE
+
+df[ allCVD, 'any_cvd' ] = 'Yes'
+df[ NACVD,  'any_cvd' ] = NA
+df$any_cvd = as.factor( df$any_cvd )
+```
+
+```{r cvdByAge}
+# Summarize incidence of CVDs by age
+s = df %>% filter( !is.na( X_age_g ) ) %>%
+    group_by( X_age_g ) %>%
+    summarize( 
+        n = n(),
+        hrt = sum( cvdinfr4 == 'Yes', na.rm = TRUE ) / n(), 
+        chd = sum( cvdcrhd4 == 'Yes', na.rm = TRUE ) / n(), 
+        stk = sum( cvdstrk3 == 'Yes', na.rm = TRUE ) / n(),
+        all = sum( any_cvd  == 'Yes', na.rm = TRUE ) / n()
+    )
+
+# Generate readable table
+names(s) = c( "Age Group", "n", "Heart Attack", "Angina/CHD", "Stroke", "Any CVD" )
+sprint   = s
+for ( col in c("Heart Attack", "Angina/CHD", "Stroke", "Any CVD") ) {
+    sprint[[col]] = percent( sprint[[col]])
+}
+
+kable( sprint, caption = "Table 8: Incidence of cardiovascular diseases by age" )
+
+# Plot various CVDs and all CVD against age
+s          = melt( s, id.vars = c("Age Group", "n" ) )
+names( s ) = c( "Age", "n", "CVD", "percentage" )
+s$labels   = percent( s$percentage )
+
+ggplot( s, aes( x = Age, y = percentage, fill = CVD, group = CVD ) )                  + 
+    geom_bar( stat = "identity", position = position_dodge(), colour = "black" )      + 
+    theme( legend.position = "bottom" )                                               + 
+    ggtitle( "Incidence of cardiovascular disease (CVD) by age group" )               + 
+    ylab( "% of total" ) + xlab( "" )                                                 +          
+    scale_fill_brewer( palette = 1 )                                                  +
+    scale_y_continuous( breaks = seq( min(s$percentage), max(s$percentage), by = 0.02 ), labels = percent )
+```
+
+```{r cvdByBMI}
+# Summarize incidence of CVDs by age
+s = df %>% filter( !is.na( X_bmi5cat ) ) %>%
+    group_by( X_bmi5cat ) %>%
+    summarize( 
+        n = n(),
+        hrt = sum( cvdinfr4 == 'Yes', na.rm = TRUE ) / n(), 
+        chd = sum( cvdcrhd4 == 'Yes', na.rm = TRUE ) / n(), 
+        stk = sum( cvdstrk3 == 'Yes', na.rm = TRUE ) / n(),
+        all = sum( any_cvd  == 'Yes', na.rm = TRUE ) / n()
+    )
+
+# Generate readable table
+names(s) = c( "BMI Category", "n", "Heart Attack", "Angina/CHD", "Stroke", "Any CVD" )
+sprint   = s
+for ( col in c("Heart Attack", "Angina/CHD", "Stroke", "Any CVD") ) {
+    sprint[[col]] = percent( sprint[[col]])
+}
+
+kable( sprint, caption = "Table 9: Incidence of cardiovascular diseases by BMI category" )
+
+# Plot various CVDs and all CVD against BMI
+s          = melt( s, id.vars = c("BMI Category", "n" ) )
+names( s ) = c( "BMI", "n", "CVD", "percentage" )
+s$labels   = percent( s$percentage )
+
+ggplot( s, aes( x = BMI, y = percentage, fill = CVD, group = CVD ) )                  + 
+    geom_bar( stat = "identity", position = position_dodge(), colour = "black" )      + 
+    theme( legend.position = "bottom" )                                               + 
+    ggtitle( "Incidence of cardiovascular disease (CVD) by BMI group" )               + 
+    ylab( "% of total" ) + xlab( "" )                                                 +          
+    scale_fill_brewer( palette = 1 )                                                  +
+    scale_y_continuous( breaks = seq( min(s$percentage), max(s$percentage), by = 0.02 ), labels = percent )
+```
+
+Incidence of cardiovascular diseases clearly increases with age, as can be seen in table 8. 
+12% or respondents aged 55-64 and over one fifth (22%) of respondents age 65+ suffer from a cardiovascular disease.
+
+BMI also affects the risk of CVD, though not nearly as strongly as age (table 9). Obese respondents have a 6% higher risk than respondents with normal weight (15% vs. 9%, respectively).
+
+However, underweight and overweight respondents seem to have a nearly identical risk for CVD (the exception being angina/coronary heart disease, for which overweight respondents have a 1% higher incidence, and stroke, for which overweight respondents have a 1% *lower* incidence with respect to underweight respondents). Both underweight and overweight respondents were slightly more likely to suffer from CVD than respondents with normal weight.
+
+
+## Part 2: Research questions
+
+**Q1. Relationship between flu vaccination and reported physical health:**
+
+Conspiracy theorists doubt the efficacy of flu vaccines, and some even claim it elevates incidence of disease. This survey does not provide specific data on incidence of inlfuenza, however as flu is a common and important disease, it might be reasonable to assume that a reduction in flu incidence will be reflected in a reudction in total reported incidence of poor physical health. Either way, investigating a possible positive or negative correlation between flu vaccination and overall physical health could proivde evidence to disprove or support these theories.
+
+To test for common confounders, we will investigate the relationship between flu vaccination and physical health in the context of resopndants' age and education level.
+
+Variables examined:
+
+Response    - physhlth (Number of days physical health bad)
+
+Explanatory -
+<ol>
+<li> flushot6 - did the respondent take a flu shot or spary in the past 12 months </li>
+<li> educa    - education level (control for possible confounder as seen above) </li>
+<li> X_age_g  - age group (control for possible confounder as seen above) </li>
+</ol>
+
+**Q2. Relationship between fruit & vegetable consumption and diabetes:**
+
+Diabetes, especially of type 2, is highly dependent on environmental factors such as diet. A common recommendation for diabetics is to avoid high sugar foods and drinks. Fruits are often high in sugar, but also in fiber and vitamins. In addition, fruit and vegetable consumption could be an indicator for better dietary awareness. It could therefore be interesting to examine a possible relationship between fruit and vegetable consumption and incidence of diabetes.
+
+Since BMI is a known factor in risk for diabetes, and we've shown that education is positively correlated with overall well being, we will control for these two variables here to better focus on fruit and vegetable consumption.
+
+Variables examined:
+
+Response    - diabete3 (Respondent ever told s/he has diabets - yes / no / pregnancy / borderline)
+
+Explanatory -
+<ol>
+<li> X_bmi5cat  - Computerd body mass index (BMI) category </li>
+<li> educa      - education level (control for possible confounder as seen above) </li>
+<li> fruit1_nor - Number of times / month fruit consumed </li>
+<li> all_veg    - Number of times / month vegetables consumed </li>
+</ol>
+
+
+**Q3. Relationship between diabetes and heart disease:**
+
+Does the incidence of diabetes raise the risk of cardiovascular diease?
+We will examine this with respect to age and BMI as possible confounders, by focusing on respondents with diabetes, and how many of them also have various cardiovascular diseases, compared to the general population that includes both diabetics and non-diabetics.
+
+Variables examined:
+
+Response - 
+<ol>
+<li> cvdinfr4 - Ever diagnosed with heart attack </li>
+<li> cvdcrhd4 - Ever diagnosed with angina or coronary heart disease </li>
+<li> cvdstrk3 - Ever diagnosed with a stroke </li>
+</ol>
+
+Explanatory -
+<ol>
+<li> X_bmi5cat - Computerd body mass index (BMI) category </li>
+<li> X_age_g   - Age group  </li>
+<li> diabete3  - Respondent ever told s/he has diabets - yes / no / pregnancy / borderline </li>
+</ol>
+
+* * *
+
+## Part 3: Exploratory data analysis
+
+**Q1. Relationship between flu vaccination and reported physical health:**
+
+```{r fluShot}
+data = df %>% 
+    filter( !is.na( flushot6 ), !is.na( educa ), !is.na( X_age_g ), !is.na( physhlth ) ) %>%
+    group_by( flushot6 ) %>% 
+    summarize(
+        n = n(),
+        mean   = mean( physhlth ),
+        median = median( physhlth ),
+        sd     = sd( physhlth ),
+        iqr    = IQR( physhlth )
+    )
+
+names( data ) = c( "Flu shot/spray", "n", "mean", "median", "sd", "iqr" )
+
+kable( data, caption = "Table 2: Flu vaccination and physical health - all respondents" )
+
+df %>% 
+    filter( !is.na( flushot6 ), !is.na( educa ), !is.na( X_age_g ), !is.na( physhlth ) ) %>%
+    ggplot( aes( x = flushot6, y = physhlth, fill = flushot6 ) )  +
+        geom_boxplot() + facet_grid( X_age_g ~ educa ) +
+        theme( legend.position="bottom" ) +
+        xlab("Flushot / spray - Yes / No") + ylab( "Num. of days physical health bad" ) +
+        ggtitle( "Flu shot and physical health in various age groups and education levels" )
+
+```
+
+Discussion:
+
+As seen in table 2, flu shots do not seem to have either a positive or a negative relationship with reported physical health for the entire population of respondents. However, in slightly a more careful examination when controlling for age and education level, we can as a slightly more nuanced pattern.
+
+<ol>
+<li> For college graduates, there doesn't seem to be any pattern just like in the overall data shown in table 2. </li>
+<li> However, for some lower education levels and higher age groups (lower left area of the plot), there seems to be a negative relationship between flu vaccination and physical health </li>
+<li> There is only one case where the flu vaccination seems to have a positive relationship with physical health: respondent of age 18-24 with elementary school level of education </li>
+<li> In some cases, there seems to be a strong negative relationship, such as in age 45-54 / 25-34 with kindergarten level education </li>
+</ol>
+
+
+Since flu vaccination does not seem to have any significant effect on overall physical health, it is more likely that the flu shot is confounded with another variable. There are some cases where it would seem that the flu vaccination is negatively correlated with health, that require further investigation. Additional confounders could be other disease factors that make respondents more likely to vaccinate, while also negatively affecting physical health. Another possiblity is that people who agree to be vaccinated are more likely to report negative health ("hypochondria").
+
+There is also the possibility of side effects to the vaccination process, though the data does not provide an explanation why these would manifest only in very specific groups only.
+
+
+**Q2. Relationship between fruit and vegetable consumption and diabetes:**
+
+```{r fruitVegDiabetes}
+# Fruit consumption
+s = df %>% 
+    filter( !is.na( X_bmi5cat ), !is.na( educa ), !is.na( fruit1_nor ), !is.na( diabete3 ) ) %>%
+    group_by( X_bmi5cat, educa, diabete3 ) %>%
+    summarize( 
+        n    = n(),
+        mean = mean( fruit1_nor ),
+        se   = sd( fruit1_nor ) / sqrt( n() ) # Standard error
+    )
+
+s$se = sapply( 
+    s$se, 
+    function(x) { 
+        if( is.na(x) ) { 
+            return( 0 ) 
+        } else {
+            return( x )
+        }
+    }
+)
+
+s %>% ggplot( aes( x = diabete3, y = mean, fill = diabete3 ) )                             +
+    geom_bar( stat = "identity", colour = "black" ) + facet_grid( X_bmi5cat ~ educa )      +
+    geom_errorbar( aes( ymax = mean + se, ymin = mean - se ) )                             +
+    theme( legend.position="bottom", axis.text.x = element_text( angle = 90, hjust = 1 ) ) +
+    xlab("Incidence of diabetes") + ylab( "Mean fruit consumption" )                       +
+    ggtitle( "Fruit consumption and diabetes" )
+
+# Vegetable consumption
+
+s = df %>% 
+    filter( !is.na( X_bmi5cat ), !is.na( educa ), !is.na( all_veg ), !is.na( diabete3 ) ) %>%
+    group_by( X_bmi5cat, educa, diabete3 ) %>%
+    summarize( 
+        n    = n(),
+        mean = mean( all_veg ),
+        se   = sd( all_veg ) / sqrt( n() ) # Standard error
+    )
+
+s$se = sapply( 
+    s$se, 
+    function(x) { 
+        if( is.na(x) ) { 
+            return( 0 ) 
+        } else {
+            return( x )
+        }
+    }
+)
+
+s %>% ggplot( aes( x = diabete3, y = mean, fill = diabete3 ) )                             +
+    geom_bar( stat = "identity", colour = "black" ) + facet_grid( X_bmi5cat ~ educa )      +
+    geom_errorbar( aes( ymax = mean + se, ymin = mean - se ) )                             +
+    theme( legend.position="bottom", axis.text.x = element_text( angle = 90, hjust = 1 ) ) +
+    xlab("Incidence of diabetes") + ylab( "Mean fruit consumption" )                       +
+    ggtitle( "Vegetable consumption and diabetes" )
+```
+
+Discussion:
+
+Above, we can see plots showing fruit and vegetable consumption plotted against the respondents' status of diabetes, education and BMI (the latter two are examined as possibe confoudners, as education has been shown to affect overall physical health and BMI is a known risk factor for diabetes).
+
+There is no evident trend showing a significant positive or negative relationship between fruit or vegetable consumption and diabetes.
+
+The few exceptions are the groups of respondents with kindergarten level education who are either underweight, normal or overweight. This could be easily explained though by noise due to the small sample sizes in these groups:
+
+```{r kindergartenBMI}
+s = df %>% filter( educa == "Kindergarten", !is.na( X_bmi5cat ) ) %>% group_by( X_bmi5cat ) %>% summarize( n = n() )
+names(s) = c( "BMI category", "Sample size" )
+
+kable(
+    s, caption = 'Table 10: Sample sizes of the various BMI groups of respondents with kindergarten level ducation'
+)
+```
+
+**Q3. Relationship between diabetes and heart disease:**
+
+#### Heart attack and diabetes by age and BMI
+
+```{r heartatckDiab}
+nall  = nrow( filter( df, !is.na( diabete3 ), !is.na( cvdinfr4 ), !is.na( X_age_g ), !is.na( X_bmi5cat ) ) )
+ncvd  = nrow( filter( df, !is.na( diabete3 ), cvdinfr4 == 'Yes', !is.na( X_age_g ), !is.na( X_bmi5cat ) ) )
+pcvd  = ncvd / nall
+
+s = df %>% 
+    filter( !is.na( diabete3 ), !is.na( cvdinfr4 ), !is.na( X_age_g ), !is.na( X_bmi5cat ) ) %>% 
+    group_by( X_age_g, X_bmi5cat, diabete3 ) %>% 
+    summarize( n = n() )
+
+grptots = c()
+for ( i in 1:nrow(s) ) {
+    age = as.character( s[i,]$X_age_g   )
+    bmi = as.character( s[i,]$X_bmi5cat )
+    
+    grptot = sum( filter(s, X_age_g == age, X_bmi5cat == bmi )$n )
+    grptots = c( grptots, grptot )
+}
+
+s$grptots = grptots
+s$cvd = apply( s, 1, function( x ) { 
+    nrow( filter( df, X_age_g == x[1], X_bmi5cat == x[2], cvdinfr4 == 'Yes' ) ) 
+} )
+
+s = s %>% filter( diabete3 == 'Yes' ) %>% 
+    mutate( 
+        p      = n / grptots,
+        dp     = p - cvd / grptots,
+        labels = percent( dp )
+    )
+
+s %>% ggplot( aes( x = X_age_g, y = dp, fill = dp < 0 ) )                         +
+    geom_bar( stat = "identity", colour = "black" ) + facet_grid( X_bmi5cat ~ . ) +
+    theme( legend.position="none" )                                               +
+    scale_y_continuous( labels = percent )                                        +
+    geom_text( aes( x = X_age_g, y = dp / 2, label = labels ), colour = "black" ) + 
+    labs( 
+        x     = "Age group", 
+        y     = "Diabetics' relative risk (%) compared to genpop", 
+        title = "Relationship between diabetes and incidence of heart attack by age and BMI" 
+    )
+```
+
+#### Angina / coronary heart disease and diabetes by age and BMI
+
+```{r anginachdDiab}
+nall  = nrow( filter( df, !is.na( diabete3 ), !is.na( cvdcrhd4 ), !is.na( X_age_g ), !is.na( X_bmi5cat ) ) )
+ncvd  = nrow( filter( df, !is.na( diabete3 ), cvdcrhd4 == 'Yes', !is.na( X_age_g ), !is.na( X_bmi5cat ) ) )
+pcvd  = ncvd / nall
+
+s = df %>% 
+    filter( !is.na( diabete3 ), !is.na( cvdcrhd4 ), !is.na( X_age_g ), !is.na( X_bmi5cat ) ) %>% 
+    group_by( X_age_g, X_bmi5cat, diabete3 ) %>% 
+    summarize( n = n() )
+
+grptots = c()
+for ( i in 1:nrow(s) ) {
+    age = as.character( s[i,]$X_age_g   )
+    bmi = as.character( s[i,]$X_bmi5cat )
+    
+    grptot = sum( filter(s, X_age_g == age, X_bmi5cat == bmi )$n )
+    grptots = c( grptots, grptot )
+}
+
+s$grptots = grptots
+s$cvd = apply( s, 1, function( x ) { 
+    nrow( filter( df, X_age_g == x[1], X_bmi5cat == x[2], cvdcrhd4 == 'Yes' ) ) 
+} )
+
+s = s %>% filter( diabete3 == 'Yes' ) %>% 
+    mutate( 
+        p      = n / grptots,
+        dp     = p - cvd / grptots,
+        labels = percent( dp )
+    )
+
+s %>% ggplot( aes( x = X_age_g, y = dp, fill = dp < 0 ) )                         +
+    geom_bar( stat = "identity", colour = "black" ) + facet_grid( X_bmi5cat ~ . ) +
+    theme( legend.position="none" )                                               +
+    scale_y_continuous( labels = percent )                                        +
+    geom_text( aes( x = X_age_g, y = dp / 2, label = labels ), colour = "black" ) + 
+    labs( 
+        x     = "Age group", 
+        y     = "Diabetics' relative risk (%) compared to genpop", 
+        title = "Relationship between diabetes and incidence of angina/CHD by age and BMI"
+    )
+```
+
+#### Stroke and diabetes by age and BMI
+
+```{r strokeDiab}
+nall  = nrow( filter( df, !is.na( diabete3 ), !is.na( cvdstrk3 ), !is.na( X_age_g ), !is.na( X_bmi5cat ) ) )
+ncvd  = nrow( filter( df, !is.na( diabete3 ), cvdstrk3 == 'Yes', !is.na( X_age_g ), !is.na( X_bmi5cat ) ) )
+pcvd  = ncvd / nall
+
+s = df %>% 
+    filter( !is.na( diabete3 ), !is.na( cvdstrk3 ), !is.na( X_age_g ), !is.na( X_bmi5cat ) ) %>% 
+    group_by( X_age_g, X_bmi5cat, diabete3 ) %>% 
+    summarize( n = n() )
+
+grptots = c()
+for ( i in 1:nrow(s) ) {
+    age = as.character( s[i,]$X_age_g   )
+    bmi = as.character( s[i,]$X_bmi5cat )
+    
+    grptot = sum( filter(s, X_age_g == age, X_bmi5cat == bmi )$n )
+    grptots = c( grptots, grptot )
+}
+
+s$grptots = grptots
+s$cvd = apply( s, 1, function( x ) { 
+    nrow( filter( df, X_age_g == x[1], X_bmi5cat == x[2], cvdstrk3 == 'Yes' ) ) 
+} )
+
+s = s %>% filter( diabete3 == 'Yes' ) %>% 
+    mutate( 
+        p      = n / grptots,
+        dp     = p - cvd / grptots,
+        labels = percent( dp )
+    )
+
+s %>% ggplot( aes( x = X_age_g, y = dp, fill = dp < 0 ) )                         +
+    geom_bar( stat = "identity", colour = "black" ) + facet_grid( X_bmi5cat ~ . ) +
+    theme( legend.position="none" )                                               +
+    scale_y_continuous( labels = percent )                                        +
+    geom_text( aes( x = X_age_g, y = dp / 2, label = labels ), colour = "black" ) + 
+    labs( 
+        x     = "Age group", 
+        y     = "Diabetics' relative risk (%) compared to genpop", 
+        title = "Relationship between diabetes and incidence of stroke by age and BMI" 
+    )
+```
+
+Discussion:
+
+The plots above specify the relative incidence of cardiovascular diseases in populations with diabetes (diabete3 == 'Yes'), compared to the incidence of these diseases in the general population. The results for each CVD disease, are broken down by age and BMI categories, each of which affects the incidence of CVD as seen earlier.
+
+These results were calculated by finding the proportion of each subgroup (age + BMI + heart disease) within the diabetic population (according to Bayes' theorem for calculating conditional probability), and subtracting from this value the proportion of CVD patiens in the same subgroup within the general population.
+
+Diabetics are generally more likely to suffer from CVD compared to the general population, with the relative percentage increasing with age and BMI. Underweight and normal weight diabetics seem to have a similar incidence of CVD compared to the general population, with underweights at slightly reduced risk in the last two age groups.
+
+Obese diabetics have a significantly elevated incidence of CVD that drastically increases with age, with the two last age groups suffering from over 20% increase in heart attack incidence, and up to 27% increase with respect to stroke.
+
+
