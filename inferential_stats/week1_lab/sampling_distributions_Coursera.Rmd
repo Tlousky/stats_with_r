@@ -158,11 +158,10 @@ population.
 
 Let's take one more sample of size 50, and view the mean area in this sample:
 ```{r mean-samp2}
-kable(
-    ames %>%
-      sample_n(size = 50) %>%
-      summarise(x_bar = mean(area))
-)
+ames %>%
+  sample_n(size = 50) %>%
+  summarise(x_bar = mean(area))
+
 ```
 
 Not surprisingly, every time we take another random sample, we get a different 
@@ -177,14 +176,9 @@ sample mean of each. Note that we are sampling with replacement,
 with replacement.
 
 ```{r loop}
-kable(
-    sample_means50 <- ames %>%
-        rep_sample_n(size = 50, reps = 15000, replace = TRUE) %>%
-        summarise(x_bar = mean(area))
-)
-
-ggplot(data = sample_means50, aes(x = x_bar)) +
-  geom_histogram(binwidth = 20)
+sample_means50 <- ames %>%
+    rep_sample_n(size = 50, reps = 15000, replace = TRUE) %>%
+    summarise(x_bar = mean(area))
 ```
 
 Here we use R to take 15,000 samples of size 50 from the population, calculate 
@@ -195,9 +189,14 @@ the mean of each sample, and store each result in a vector called
 **Exercise**: How many elements are there in `sample_means50`?  Describe the sampling distribution, and be sure to specifically note its center. Make sure to include a plot of the distribution in your answer.
 </div>
 ```{r sampling-dist}
-# type your code for the Exercise here, and Run Document
+kable( summary( sample_means50 ) )
 
+ggplot(data = sample_means50, aes(x = x_bar)) +
+  geom_histogram(binwidth = 20)
 ```
+
+The sampling distribution is highly normal, with an almost identical mean and median.
+The sampling mean is also quite close to the population mean, although the median is closer.
 
 ## Interlude: Sampling distributions
 
@@ -226,9 +225,14 @@ Note that for each of the 15,000 times we computed a mean, we did so from a
 **Exercise**: To make sure you understand how sampling distributions are built, and exactly what the `sample_n` and `do` function do, try modifying the code to create a sampling distribution of **25 sample means** from **samples of size 10**, and put them in a data frame named `sample_means_small`. Print the output. How many observations are there in this object called `sample_means_small`? What does each observation represent?
 </div>
 ```{r practice-sampling-dist}
-# type your code for the Exercise here, and Run Document
+sample_means_small = ames %>%
+    rep_sample_n(size = 10, reps = 25, replace = TRUE) %>% 
+    summarise(x_bar = mean(area))
 
+kable( sample_means_small )
 ```
+
+So we have 25 replications, and 25 sample means of samples with n=10.
 
 3. How many elements are there in this object called `sample_means_small`? 
 <ol>
@@ -239,8 +243,7 @@ Note that for each of the 15,000 times we computed a mean, we did so from a
 <li> 5,000 </li>
 </ol>
 ```{r sample-means-small}
-# type your code for Question 3 here, and Run Document
-
+kable( paste0( "n = ", nrow(sample_means_small) ) )
 ```
 
 4. Which of the following is **true** about the elements in the sampling distributions you created?
@@ -366,23 +369,44 @@ shinyApp(
 **Exercise**: Take a random sample of size 50 from `price`. Using this sample, what is your best point estimate of the population mean?
 </div>
 ```{r price-sample}
-# type your code for this Exercise here, and Run Document
-
+kable(
+    ames %>%
+      sample_n( size = 50 ) %>%
+      summarise( x_bar = mean(price) )
+)
 ```
 
 <div id="exercise">
 **Exercise**: Since you have access to the population, simulate the sampling distribution for $\bar{x}_{price}$ by taking 5000 samples from the population of size 50 and computing 5000 sample means.  Store these means in a vector called `sample_means50`. Plot the data, then describe the shape of this sampling distribution. Based on this sampling distribution, what would you guess the mean home price of the population to be?
 </div>
-```{r price-sampling}
-# type your code for this Exercise here, and Run Document
 
+```{r price-sampling}
+sample_means50 = ames %>%
+    rep_sample_n(size = 50, reps = 5000, replace = TRUE) %>% 
+    summarise(x_bar = mean(price))
+
+ggplot(data = sample_means50, aes(x = x_bar)) +
+  geom_histogram(binwidth = 1000)
+
+kable(
+    summary( sample_means50 )
+)
 ```
 
 <div id="exercise">
 **Exercise**: Change your sample size from 50 to 150, then compute the sampling distribution using the same method as above, and store these means in a new vector called `sample_means150`. Describe the shape of this sampling distribution, and compare it to the sampling distribution for a sample size of 50.  Based on this sampling distribution, what would you guess to be the mean sale price of homes in Ames?
 </div>
 ```{r price-sampling-more}
-# type your code for this Exercise here, and Run Document
+sample_means150 = ames %>%
+    rep_sample_n(size = 150, reps = 5000, replace = TRUE) %>% 
+    summarise(x_bar = mean(price))
+
+ggplot(data = sample_means150, aes(x = x_bar)) +
+  geom_histogram(binwidth = 1000)
+
+kable(
+    summary( sample_means150 )
+)
 
 ```
 
@@ -399,7 +423,9 @@ summary statistics. You are welcomed to use the app for exploration.
 **Exercise**: Take a sample of size 15 from the population and calculate the mean `price` of the homes in this sample. Using this sample, what is your best point estimate of the population mean of prices of homes?
 </div>
 ```{r price-sample-small}
-# type your code for this Exercise here, and Run Document
+kable(
+    ames %>% sample_n( size = 15 ) %>% summarize( smpl_mean = mean( price ) ) 
+)
 
 ```
 
@@ -407,15 +433,24 @@ summary statistics. You are welcomed to use the app for exploration.
 **Exercise**: Since you have access to the population, simulate the sampling distribution for $\bar{x}_{price}$ by taking 2000 samples from the population of size 15 and computing 2000 sample means. Store these means in a vector called `sample_means15`. Plot the data, then describe the shape of this sampling distribution. Based on this sampling distribution, what would you guess the mean home price of the population to be? Finally, calculate and report the population mean.
 </div>
 ```{r price-sampling-small}
-# type your code for this Exercise here, and Run Document
+sample_means15 = ames %>% rep_sample_n( size = 15, rep = 2000, replace = TRUE ) %>% summarize( X_bar = mean( price ) )
 
+ggplot( data = sample_means15, aes( x = X_bar ) ) +
+    geom_histogram( binwidth = 2500 )
+
+kable( summary( sample_means15 ) )
 ```
 
 <div id="exercise">
 **Exercise**: Change your sample size from 15 to 150, then compute the sampling distribution using the same method as above, and store these means in a new vector called `sample_means150`. Describe the shape of this sampling distribution, and compare it to the sampling distribution for a sample size of 15. Based on this sampling distribution, what would you guess to be the mean sale price of homes in Ames?
 </div>
 ```{r price-sampling-big}
-# type your code for this Exercise here, and Run Document
+sample_means150 = ames %>% rep_sample_n( size = 150, rep = 2000, replace = TRUE ) %>% summarize( X_bar = mean( price ) )
+
+ggplot( data = sample_means150, aes( x = X_bar ) ) +
+    geom_histogram( binwidth = 2500 )
+
+kable( summary( sample_means150 ) )
 
 ```
 
@@ -426,8 +461,10 @@ summary statistics. You are welcomed to use the app for exploration.
 <li> Both sampling distributions are symmetric. </li>
 </ol>
 ```{r price-sampling-compare}
-# type your code for Question 6 here, and Run Document
+se15  = sd( sample_means15$X_bar,  na.rm = TRUE ) / sqrt( nrow( sample_means15 ) )
+se150 = sd( sample_means150$X_bar, na.rm = TRUE ) / sqrt( nrow( sample_means150 ) )
 
+paste0( "1. se15 < se150: ", se15 < se150 )
 ```
 
 <div id="license">
